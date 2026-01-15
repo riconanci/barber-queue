@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import type { QueueEntry, ShopSettings } from "@/lib/types";
 import { displayName } from "@/lib/types";
 import { login, logout } from "@/app/actions/auth";
-import { acceptClient, skipClient, undoSkip, recall, markNoShow } from "@/app/actions/queue";
+import { acceptClient, skipClient, undoSkip, recall, markNoShow, markServed } from "@/app/actions/queue";
 
 export default function StaffPage() {
   const router = useRouter();
@@ -194,18 +194,40 @@ export default function StaffPage() {
       </header>
 
       <div style={styles.container}>
-        {/* UP NEXT CARD */}
-        <section style={styles.upNextCard}>
-          <div style={styles.sectionLabel}>UP NEXT</div>
-
-          {called ? (
-            <div style={styles.calledInfo}>
-              <div style={styles.calledName}>{displayName(called)}</div>
-              <div style={styles.calledMeta}>
+        {/* NOW SERVING - currently called person */}
+        {called && (
+          <section style={styles.servingCard}>
+            <div style={styles.sectionLabel}>NOW SERVING</div>
+            <div style={styles.servingInfo}>
+              <div style={styles.servingName}>{displayName(called)}</div>
+              <div style={styles.servingMeta}>
                 with {nameMap.get(called.called_by_barber_id ?? "") ?? called.called_by_barber_id}
               </div>
             </div>
-          ) : upNext ? (
+            <div style={styles.servingActions}>
+              <button
+                onClick={() => run(() => markServed(called.id))}
+                style={styles.doneBtn}
+                disabled={busy}
+              >
+                Done
+              </button>
+              <button
+                onClick={() => run(() => markNoShow(called.id))}
+                style={styles.noShowBtnSmall}
+                disabled={busy}
+              >
+                No-show
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* UP NEXT CARD - next waiting person */}
+        <section style={styles.upNextCard}>
+          <div style={styles.sectionLabel}>UP NEXT</div>
+
+          {upNext ? (
             <>
               <div style={styles.upNextInfo}>
                 <div style={styles.upNextName}>{displayName(upNext)}</div>
@@ -440,6 +462,50 @@ const styles: Record<string, React.CSSProperties> = {
     backdropFilter: "blur(10px)",
   },
 
+  servingCard: {
+    borderRadius: 18,
+    background: "rgba(74, 222, 128, 0.08)",
+    border: "1px solid rgba(74, 222, 128, 0.20)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+    padding: "clamp(14px, 3vw, 20px)",
+    backdropFilter: "blur(10px)",
+  },
+
+  servingInfo: {
+    textAlign: "center",
+    marginBottom: 12,
+  },
+
+  servingName: {
+    fontSize: "clamp(20px, 4vw, 28px)",
+    fontWeight: 950,
+    color: "#f9fafb",
+  },
+
+  servingMeta: {
+    marginTop: 4,
+    fontSize: "clamp(12px, 2.5vw, 16px)",
+    fontWeight: 800,
+    opacity: 0.7,
+  },
+
+  servingActions: {
+    display: "flex",
+    gap: 10,
+    justifyContent: "center",
+  },
+
+  noShowBtnSmall: {
+    padding: "10px 16px",
+    borderRadius: 12,
+    border: "1px solid rgba(248, 113, 113, 0.22)",
+    background: "rgba(248, 113, 113, 0.12)",
+    color: "rgba(254, 226, 226, 0.95)",
+    fontSize: "clamp(12px, 2.5vw, 14px)",
+    fontWeight: 950,
+    cursor: "pointer",
+  },
+
   sectionLabel: {
     textAlign: "center",
     fontWeight: 900,
@@ -448,22 +514,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "clamp(12px, 2vw, 15px)",
     opacity: 0.75,
     marginBottom: 12,
-  },
-
-  calledInfo: {
-    textAlign: "center",
-    padding: "8px 0",
-  },
-  calledName: {
-    fontSize: "clamp(24px, 5vw, 36px)",
-    fontWeight: 950,
-    color: "#f9fafb",
-  },
-  calledMeta: {
-    marginTop: 4,
-    fontSize: "clamp(14px, 3vw, 18px)",
-    fontWeight: 800,
-    opacity: 0.7,
   },
 
   upNextInfo: {
@@ -509,6 +559,17 @@ const styles: Record<string, React.CSSProperties> = {
 
   acceptBtn: {
     padding: "12px 20px",
+    borderRadius: 12,
+    border: "1px solid rgba(74, 222, 128, 0.25)",
+    background: "rgba(74, 222, 128, 0.15)",
+    color: "rgba(187, 247, 208, 0.95)",
+    fontSize: "clamp(14px, 3vw, 16px)",
+    fontWeight: 950,
+    cursor: "pointer",
+  },
+
+  doneBtn: {
+    padding: "12px 24px",
     borderRadius: 12,
     border: "1px solid rgba(74, 222, 128, 0.25)",
     background: "rgba(74, 222, 128, 0.15)",
