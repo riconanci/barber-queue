@@ -8,8 +8,7 @@ import type { Barber, ShopSettings } from "@/lib/types";
 export default function KioskPage() {
   const [settings, setSettings] = useState<ShopSettings | null>(null);
 
-  const [first, setFirst] = useState("");
-  const [initial, setInitial] = useState("");
+  const [name, setName] = useState("");
   const [preferred, setPreferred] = useState<string | null>(null);
 
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
@@ -46,7 +45,29 @@ export default function KioskPage() {
     [settings]
   );
 
-  const canSubmit = first.trim().length > 0 && initial.trim().length === 1 && !submitting;
+  // Parse name: "John Q" -> first="John", initial="Q"
+  const parseName = (input: string) => {
+    const trimmed = input.trim();
+    const parts = trimmed.split(/\s+/);
+    if (parts.length < 2) return { first: trimmed, initial: "" };
+    
+    const lastPart = parts[parts.length - 1];
+    // If last part is a single character, use it as initial
+    if (lastPart.length === 1) {
+      return {
+        first: parts.slice(0, -1).join(" "),
+        initial: lastPart.toUpperCase()
+      };
+    }
+    // Otherwise use first character of last part as initial
+    return {
+      first: parts.slice(0, -1).join(" "),
+      initial: lastPart[0].toUpperCase()
+    };
+  };
+
+  const parsed = parseName(name);
+  const canSubmit = parsed.first.length > 0 && parsed.initial.length === 1 && !submitting;
 
   async function submit() {
     if (!canSubmit) return;
@@ -54,7 +75,7 @@ export default function KioskPage() {
     setSubmitting(true);
     setErrorMsg(null);
 
-    const res = await addClient(first, initial, preferred);
+    const res = await addClient(parsed.first, parsed.initial, preferred);
     setSubmitting(false);
 
     if (!res.ok) {
@@ -62,7 +83,7 @@ export default function KioskPage() {
       return;
     }
 
-    const msg = `Checked in as ${first.trim()} ${initial.trim().toUpperCase()}.`;
+    const msg = `${parsed.first} ${parsed.initial}.`;
     const time = new Date().toLocaleTimeString('en-US', { 
       hour: 'numeric', 
       minute: '2-digit',
@@ -71,15 +92,14 @@ export default function KioskPage() {
     setDoneMsg(msg);
     setDoneTime(time);
 
-    setFirst("");
-    setInitial("");
+    setName("");
     setPreferred(null);
 
     // auto reset confirmation
     setTimeout(() => {
       setDoneMsg(null);
       setDoneTime(null);
-    }, 3200);
+    }, 1500);
   }
 
   return (
@@ -110,28 +130,15 @@ export default function KioskPage() {
           <>
             <div style={styles.fieldGroup}>
               <div style={styles.label}>Name and last initial</div>
-              <div style={styles.fieldRow}>
-                <input
-                  value={first}
-                  onChange={(e) => setFirst(e.target.value)}
-                  autoCapitalize="words"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  style={styles.input}
-                  placeholder="First name"
-                />
-                <input
-                  value={initial}
-                  onChange={(e) => setInitial(e.target.value.toUpperCase().slice(0, 1))}
-                  maxLength={1}
-                  autoCapitalize="characters"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  inputMode="text"
-                  style={{ ...styles.input, ...styles.initialInput }}
-                  placeholder="A"
-                />
-              </div>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoCapitalize="words"
+                autoCorrect="off"
+                spellCheck={false}
+                style={styles.input}
+                placeholder="John Q"
+              />
             </div>
 
             <div style={styles.prefsWrap}>
@@ -249,11 +256,6 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
   },
 
-  fieldRow: {
-    display: "flex",
-    gap: 12,
-  },
-
   label: {
     fontWeight: 850,
     opacity: 0.8,
@@ -261,7 +263,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   input: {
-    flex: 1,
+    width: "100%",
     padding: "14px 14px",
     borderRadius: 14,
     border: "1px solid rgba(255,255,255,0.10)",
@@ -270,11 +272,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#f9fafb",
     fontSize: "clamp(18px, 4.2vw, 22px)",
     fontWeight: 850,
-  },
-
-  initialInput: {
-    flex: "0 0 80px",
-    textAlign: "center",
   },
 
   prefsWrap: {
