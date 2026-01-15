@@ -13,6 +13,7 @@ export default function KioskPage() {
   const [preferred, setPreferred] = useState<string | null>(null);
 
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
+  const [doneTime, setDoneTime] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -62,14 +63,23 @@ export default function KioskPage() {
     }
 
     const msg = `Checked in as ${first.trim()} ${initial.trim().toUpperCase()}.`;
+    const time = new Date().toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit',
+      hour12: true 
+    });
     setDoneMsg(msg);
+    setDoneTime(time);
 
     setFirst("");
     setInitial("");
     setPreferred(null);
 
     // auto reset confirmation
-    setTimeout(() => setDoneMsg(null), 3200);
+    setTimeout(() => {
+      setDoneMsg(null);
+      setDoneTime(null);
+    }, 3200);
   }
 
   return (
@@ -93,6 +103,7 @@ export default function KioskPage() {
           <div style={styles.successWrap}>
             <div style={styles.successTitle}>You're in!</div>
             <div style={styles.successMsg}>{doneMsg}</div>
+            {doneTime && <div style={styles.successTime}>{doneTime}</div>}
             <div style={styles.successHint}>Please take a seat.</div>
           </div>
         ) : (
@@ -348,6 +359,13 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 10,
     opacity: 0.7,
     fontWeight: 850,
+  },
+  successTime: {
+    marginTop: 8,
+    fontSize: "clamp(16px, 3.5vw, 20px)",
+    fontWeight: 900,
+    opacity: 0.8,
+    color: "#94a3b8",
   },
 
   footerNote: {

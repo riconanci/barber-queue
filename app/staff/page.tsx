@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import type { QueueEntry, ShopSettings } from "@/lib/types";
 import { displayName } from "@/lib/types";
 import { login, logout } from "@/app/actions/auth";
-import { acceptClient, skipClient, undoSkip, recall, markNoShow, markServed } from "@/app/actions/queue";
+import { acceptClient, skipClient, recall, markNoShow } from "@/app/actions/queue";
 
 export default function StaffPage() {
   const router = useRouter();
@@ -85,11 +85,11 @@ export default function StaffPage() {
     return nonSkipped[0] ?? null;
   }, [waiting]);
 
-  // Waiting for Barbers: skipped clients grouped by barber
+  // Waiting for Barbers: skipped clients grouped by barber, oldest first
   const waitingForBarbers = useMemo(() => {
     const skipped = waiting
       .filter((e) => !!e.skipped_at && !!e.preferred_barber_id)
-      .sort((a, b) => +new Date(a.skipped_at!) - +new Date(b.skipped_at!));
+      .sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at)); // Oldest first by original queue time
 
     // Group by barber
     const grouped = new Map<string, QueueEntry[]>();
@@ -137,12 +137,14 @@ export default function StaffPage() {
     }
   }
 
-  // Time ago helper
-  function timeAgo(dateStr: string) {
-    const mins = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000);
-    if (mins < 1) return "just now";
-    if (mins === 1) return "1 min";
-    return `${mins} min`;
+  // Format time in 12hr format
+  function formatTime(dateStr: string) {
+    const date = new Date(dateStr);
+    return date.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit',
+      hour12: true 
+    });
   }
 
   if (!role) {
@@ -194,35 +196,6 @@ export default function StaffPage() {
       </header>
 
       <div style={styles.container}>
-        {/* NOW SERVING - currently called person */}
-        {called && (
-          <section style={styles.servingCard}>
-            <div style={styles.sectionLabel}>NOW SERVING</div>
-            <div style={styles.servingInfo}>
-              <div style={styles.servingName}>{displayName(called)}</div>
-              <div style={styles.servingMeta}>
-                with {nameMap.get(called.called_by_barber_id ?? "") ?? called.called_by_barber_id}
-              </div>
-            </div>
-            <div style={styles.servingActions}>
-              <button
-                onClick={() => run(() => markServed(called.id))}
-                style={styles.doneBtn}
-                disabled={busy}
-              >
-                Done
-              </button>
-              <button
-                onClick={() => run(() => markNoShow(called.id))}
-                style={styles.noShowBtnSmall}
-                disabled={busy}
-              >
-                No-show
-              </button>
-            </div>
-          </section>
-        )}
-
         {/* UP NEXT CARD - next waiting person */}
         <section style={styles.upNextCard}>
           <div style={styles.sectionLabel}>UP NEXT</div>
@@ -258,31 +231,14 @@ export default function StaffPage() {
                     </button>
                   </>
                 ) : (
-                  // Any barber - show dropdown
-                  <div style={styles.acceptRow}>
-                    <select
-                      id="barberSelect"
-                      style={styles.barberSelect}
-                      defaultValue=""
-                    >
-                      <option value="" disabled>Accept as...</option>
-                      {workingBarbers.map((b) => (
-                        <option key={b.id} value={b.id}>{b.name}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => {
-                        const select = document.getElementById("barberSelect") as HTMLSelectElement;
-                        if (select.value) {
-                          run(() => acceptClient(upNext.id, select.value));
-                        }
-                      }}
-                      style={styles.acceptBtn}
-                      disabled={busy}
-                    >
-                      Accept
-                    </button>
-                  </div>
+                  // Any barber - just show Accept
+                  <button
+                    onClick={() => run(() => acceptClient(upNext.id, workingBarbers[0]?.id ?? ""))}
+                    style={styles.acceptBtn}
+                    disabled={busy}
+                  >
+                    Accept
+                  </button>
                 )}
                 <button
                   onClick={() => run(() => markNoShow(upNext.id))}
@@ -315,7 +271,7 @@ export default function StaffPage() {
                     <div key={e.id} style={styles.waiterRow}>
                       <div style={styles.waiterInfo}>
                         <span style={styles.waiterName}>{displayName(e)}</span>
-                        <span style={styles.waiterTime}>{timeAgo(e.skipped_at!)}</span>
+                        <span style={styles.waiterTime}>{formatTime(e.created_at)}</span>
                       </div>
                       <div style={styles.waiterActions}>
                         <button
@@ -324,13 +280,6 @@ export default function StaffPage() {
                           disabled={busy}
                         >
                           Accept
-                        </button>
-                        <button
-                          onClick={() => run(() => undoSkip(e.id))}
-                          style={styles.smallUndoBtn}
-                          disabled={busy}
-                        >
-                          ↩
                         </button>
                         <button
                           onClick={() => run(() => markNoShow(e.id))}
