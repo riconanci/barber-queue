@@ -1,275 +1,195 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import type { QueueEntry, ShopSettings, Barber } from "@/lib/types";
-import { displayName } from "@/lib/types";
-import { login, logout } from "@/app/actions/auth";
-import { staffNext, recall, markNoShow, assignPreferredBarber } from "@/app/actions/queue";
+import { addClient } from "@/app/actions/queue";
+import type { Barber, ShopSettings } from "@/lib/types";
 
-export default function StaffPage() {
-  const router = useRouter();
-  const [role, setRole] = useState<"staff" | "admin" | null>(null);
-  const [pin, setPin] = useState("");
-
+export default function KioskPage() {
   const [settings, setSettings] = useState<ShopSettings | null>(null);
-  const [entries, setEntries] = useState<QueueEntry[]>([]);
 
-  const [myBarberId, setMyBarberId] = useState<string>("");
-  const [busy, setBusy] = useState(false);
+  const [first, setFirst] = useState("");
+  const [initial, setInitial] = useState("");
+  const [preferred, setPreferred] = useState<string | null>(null);
+
+  const [doneMsg, setDoneMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    (async () => {
-      const s = await supabase.from("shop_settings").select("*").eq("id", true).single();
-      setSettings((s.data ?? null) as ShopSettings | null);
+    let mounted = true;
 
-      const q = await supabase
-        .from("queue_entries")
-        .select("*")
-        .in("status", ["waiting", "called"])
-        .order("created_at", { ascending: true });
+    async function load() {
+      const { data } = await supabase.from("shop_settings").select("*").eq("id", true).single();
+      if (!mounted) return;
+      setSettings((data ?? null) as ShopSettings | null);
+    }
 
-      setEntries((q.data ?? []) as QueueEntry[]);
-    })();
+    load();
 
-    const qch = supabase
-      .channel("queue_staff")
-      .on("postgres_changes", { event: "*", schema: "public", table: "queue_entries" }, async () => {
-        const q = await supabase
-          .from("queue_entries")
-          .select("*")
-          .in("status", ["waiting", "called"])
-          .order("created_at", { ascending: true });
-        setEntries((q.data ?? []) as QueueEntry[]);
-      })
-      .subscribe();
-
-    const sch = supabase
-      .channel("settings_staff")
+    const ch = supabase
+      .channel("settings_kiosk")
       .on("postgres_changes", { event: "*", schema: "public", table: "shop_settings" }, (payload) => {
         setSettings(payload.new as ShopSettings);
       })
       .subscribe();
 
     return () => {
-      supabase.removeChannel(qch);
-      supabase.removeChannel(sch);
+      mounted = false;
+      supabase.removeChannel(ch);
     };
   }, []);
 
-  const workingBarbers = useMemo(
+  const workingBarbers: Barber[] = useMemo(
     () => (settings?.barbers ?? []).filter((b) => b.working),
     [settings]
   );
 
-  useEffect(() => {
-    if (!myBarberId && workingBarbers.length) setMyBarberId(workingBarbers[0].id);
-  }, [workingBarbers, myBarberId]);
+  const canSubmit = first.trim().length > 0 && initial.trim().length === 1 && !submitting;
 
-  const called = useMemo(() => {
-    const calledOnes = entries.filter((e) => e.status === "called");
-    calledOnes.sort((a, b) => +new Date(b.called_at ?? 0) - +new Date(a.called_at ?? 0));
-    return calledOnes[0] ?? null;
-  }, [entries]);
+  async function submit() {
+    if (!canSubmit) return;
 
-  const waiting = useMemo(() => entries.filter((e) => e.status === "waiting"), [entries]);
+    setSubmitting(true);
+    setErrorMsg(null);
 
-  async function doLogin() {
-    const res = await login(pin);
+    const res = await addClient(first, initial, preferred);
+    setSubmitting(false);
+
     if (!res.ok) {
-      alert("Wrong PIN");
-      setPin("");
+      setErrorMsg(res.error ?? "Could not check in.");
       return;
     }
-    setRole(res.role);
-    setPin("");
-  }
 
-  async function doLock() {
-    await logout();
-    setRole(null);
-  }
+    const msg = `Checked in as ${first.trim()} ${initial.trim().toUpperCase()}.`;
+    setDoneMsg(msg);
 
-  async function run(action: () => Promise<any>) {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const res = await action();
-      if (res && res.ok === false) alert(res.error ?? "Action failed");
-    } finally {
-      setBusy(false);
-    }
-  }
+    setFirst("");
+    setInitial("");
+    setPreferred(null);
 
-  if (!role) {
-    return (
-      <div style={styles.page}>
-        <div style={styles.centerWrap}>
-          <div style={styles.header}>
-            <div style={styles.title}>Staff</div>
-            <div style={styles.subtitle}>Enter PIN to unlock</div>
-          </div>
-
-          <div style={styles.card}>
-            <input
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-              placeholder="PIN"
-              inputMode="numeric"
-              style={styles.input}
-              onKeyDown={(e) => e.key === "Enter" && doLogin()}
-            />
-            <button onClick={doLogin} style={styles.primaryBtn}>
-              Unlock
-            </button>
-
-            <div style={styles.note}>
-              Tip: save this page to your home screen for fast access.
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+    // auto reset confirmation
+    setTimeout(() => setDoneMsg(null), 3200);
   }
 
   return (
     <div style={styles.page}>
       <style>{`
-        @keyframes softFlashDark {
-          0% { transform: scale(1); box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
-          45% { transform: scale(1.01); box-shadow: 0 16px 44px rgba(0,0,0,0.48); }
-          100% { transform: scale(1); box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
+        input::placeholder { color: rgba(229,231,235,0.45); }
+        @keyframes softPop {
+          0% { transform: scale(1); opacity: 0.0; }
+          15% { transform: scale(1.01); opacity: 1.0; }
+          100% { transform: scale(1); opacity: 1.0; }
         }
       `}</style>
 
-      <header style={styles.topBar}>
-        <div style={styles.topBarTitle}>Staff Controls</div>
-        <div style={styles.topBarActions}>
-          <button onClick={() => router.push("/settings")} style={styles.ghostBtn}>
-            Settings
-          </button>
-          <button onClick={doLock} style={styles.ghostBtn}>
-            Lock
-          </button>
-        </div>
+      <header style={styles.header}>
+        <div style={styles.title}>Check In</div>
+        <div style={styles.subtitle}>Walk-in queue</div>
       </header>
 
-      <div style={styles.grid}>
-        {/* CONTROLS */}
-        <section style={styles.card}>
-          <div style={styles.sectionLabel}>Controls</div>
-
-          <div style={styles.rowStack}>
-            <label style={styles.smallLabel}>I'm</label>
-            <select
-              value={myBarberId}
-              onChange={(e) => setMyBarberId(e.target.value)}
-              style={styles.select}
-            >
-              {workingBarbers.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-
-            <div style={styles.btnRow}>
-              <button
-                onClick={() => run(() => staffNext(myBarberId))}
-                style={styles.primaryBtn}
-                disabled={busy}
-              >
-                Next for me
-              </button>
-
-              <button onClick={() => run(() => recall())} style={styles.secondaryBtn} disabled={busy}>
-                Recall
-              </button>
-            </div>
-
-            <div style={styles.nowUpBox}>
-              <div style={styles.smallLabel}>Now Up</div>
-              <div style={styles.nowUpName}>{called ? displayName(called) : "—"}</div>
-            </div>
+      <section style={styles.card}>
+        {doneMsg ? (
+          <div style={styles.successWrap}>
+            <div style={styles.successTitle}>You're in!</div>
+            <div style={styles.successMsg}>{doneMsg}</div>
+            <div style={styles.successHint}>Please take a seat.</div>
           </div>
-        </section>
-
-        {/* WAITING LIST */}
-        <section style={styles.card}>
-          <div style={styles.sectionLabel}>
-            Waiting <span style={styles.waitingCount}>({waiting.length})</span>
-          </div>
-
-          {waiting.length === 0 ? (
-            <div style={styles.empty}>No one waiting.</div>
-          ) : (
-            <div style={styles.waitingList}>
-              {waiting.slice(0, 30).map((e) => (
-                <WaitingRow
-                  key={e.id}
-                  e={e}
-                  settings={settings}
-                  workingBarbers={workingBarbers}
-                  busy={busy}
-                  onNoShow={() => run(() => markNoShow(e.id))}
-                  onAssign={(barberIdOrNull) => run(() => assignPreferredBarber(e.id, barberIdOrNull))}
+        ) : (
+          <>
+            <div style={styles.fieldGroup}>
+              <div style={styles.label}>Name and last initial</div>
+              <div style={styles.fieldRow}>
+                <input
+                  value={first}
+                  onChange={(e) => setFirst(e.target.value)}
+                  autoCapitalize="words"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  style={styles.input}
+                  placeholder="First name"
                 />
-              ))}
+                <input
+                  value={initial}
+                  onChange={(e) => setInitial(e.target.value.toUpperCase().slice(0, 1))}
+                  maxLength={1}
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  inputMode="text"
+                  style={{ ...styles.input, ...styles.initialInput }}
+                  placeholder="A"
+                />
+              </div>
             </div>
-          )}
-        </section>
+
+            <div style={styles.prefsWrap}>
+              <div style={styles.prefsLabel}>Waiting for</div>
+
+              <div style={styles.pillRow}>
+                <PillButton
+                  active={preferred === null}
+                  onClick={() => setPreferred(null)}
+                  label="Any barber"
+                />
+
+                {workingBarbers.map((b) => (
+                  <PillButton
+                    key={b.id}
+                    active={preferred === b.id}
+                    onClick={() => setPreferred(b.id)}
+                    label={b.name}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {errorMsg ? <div style={styles.error}>{errorMsg}</div> : null}
+
+            <button
+              onClick={submit}
+              disabled={!canSubmit}
+              style={{
+                ...styles.primaryBtn,
+                ...(canSubmit ? {} : styles.primaryBtnDisabled),
+              }}
+            >
+              {submitting ? "Checking in…" : "Check in"}
+            </button>
+
+            <div style={styles.footerNote}>
+              Please enter your name at the shop kiosk.
+            </div>
+          </>
+        )}
+      </section>
+
+      <div style={styles.bottomHint}>
+        Tip: enable iPad <b>Guided Access</b> to keep this screen locked.
       </div>
     </div>
   );
 }
 
-function WaitingRow({
-  e,
-  settings,
-  workingBarbers,
-  busy,
-  onNoShow,
-  onAssign,
+function PillButton({
+  active,
+  onClick,
+  label,
 }: {
-  e: QueueEntry;
-  settings: ShopSettings | null;
-  workingBarbers: Barber[];
-  busy: boolean;
-  onNoShow: () => void;
-  onAssign: (barberIdOrNull: string | null) => void;
+  active: boolean;
+  onClick: () => void;
+  label: string;
 }) {
-  const currentLabel = e.preferred_barber_id
-    ? settings?.barbers.find((b) => b.id === e.preferred_barber_id)?.name ?? e.preferred_barber_id
-    : "Any barber";
-
   return (
-    <div style={styles.waitingRow}>
-      <div style={styles.waitingTop}>
-        <div style={styles.waitingName}>{displayName(e)}</div>
-        <div style={styles.waitingMeta}>{currentLabel}</div>
-      </div>
-
-      <div style={styles.waitingActions}>
-        <select
-          value={e.preferred_barber_id ?? ""}
-          onChange={(ev) => onAssign(ev.target.value ? ev.target.value : null)}
-          style={styles.selectSmall}
-          disabled={busy}
-        >
-          <option value="">Any barber</option>
-          {workingBarbers.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
-
-        <button onClick={onNoShow} style={styles.dangerBtn} disabled={busy}>
-          No-show
-        </button>
-      </div>
-    </div>
+    <button
+      onClick={onClick}
+      style={{
+        ...styles.pill,
+        ...(active ? styles.pillActive : styles.pillInactive),
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -282,93 +202,55 @@ const styles: Record<string, React.CSSProperties> = {
     background:
       "radial-gradient(1000px 700px at 20% 0%, rgba(255,255,255,0.05), rgba(0,0,0,0) 60%)," +
       "linear-gradient(180deg, #0b0f16 0%, #0a0e14 50%, #070a10 100%)",
-  },
-
-  centerWrap: {
-    minHeight: "100vh",
     display: "grid",
     placeItems: "center",
   },
 
   header: {
     width: "min(720px, 100%)",
-    textAlign: "center",
     marginBottom: 12,
+    textAlign: "center",
   },
   title: {
     fontSize: "clamp(28px, 6vw, 44px)",
     fontWeight: 950,
+    letterSpacing: -0.5,
     color: "#f9fafb",
   },
   subtitle: {
     marginTop: 6,
+    fontSize: "clamp(14px, 2.6vw, 18px)",
     opacity: 0.7,
-    fontWeight: 850,
-  },
-
-  topBar: {
-    maxWidth: 980,
-    margin: "0 auto 14px auto",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 12,
-  },
-  topBarTitle: {
-    fontSize: "clamp(18px, 3.5vw, 24px)",
-    fontWeight: 950,
-    color: "#f9fafb",
-  },
-  topBarActions: {
-    display: "flex",
-    gap: 8,
-  },
-
-  grid: {
-    maxWidth: 980,
-    margin: "0 auto",
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: 14,
   },
 
   card: {
+    width: "min(720px, 100%)",
     borderRadius: 18,
-    background: "rgba(17, 24, 39, 0.70)",
+    background: "rgba(17, 24, 39, 0.75)",
     border: "1px solid rgba(255,255,255,0.08)",
     boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
     padding: "clamp(14px, 3vw, 22px)",
     backdropFilter: "blur(10px)",
   },
 
-  sectionLabel: {
-    textAlign: "center",
-    fontWeight: 900,
-    letterSpacing: 2,
-    textTransform: "uppercase",
-    fontSize: "clamp(12px, 2vw, 15px)",
-    opacity: 0.75,
-    marginBottom: 10,
-  },
-
-  waitingCount: {
-    opacity: 0.6,
-    fontWeight: 800,
-  },
-
-  rowStack: {
+  fieldGroup: {
     display: "grid",
-    gap: 10,
+    gap: 8,
   },
 
-  smallLabel: {
+  fieldRow: {
+    display: "flex",
+    gap: 12,
+  },
+
+  label: {
     fontWeight: 850,
-    opacity: 0.75,
-    fontSize: "clamp(12px, 2.2vw, 14px)",
+    opacity: 0.8,
+    fontSize: "clamp(12px, 2.2vw, 15px)",
   },
 
   input: {
-    width: "100%",
+    flex: 1,
     padding: "14px 14px",
     borderRadius: 14,
     border: "1px solid rgba(255,255,255,0.10)",
@@ -379,147 +261,108 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 850,
   },
 
-  select: {
-    width: "100%",
-    padding: "12px 12px",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.10)",
-    outline: "none",
-    background: "rgba(0,0,0,0.20)",
-    color: "#f9fafb",
-    fontSize: "clamp(16px, 3.6vw, 18px)",
-    fontWeight: 850,
+  initialInput: {
+    flex: "0 0 80px",
+    textAlign: "center",
   },
 
-  selectSmall: {
-    flex: 1,
-    padding: "10px 10px",
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.10)",
-    outline: "none",
-    background: "rgba(0,0,0,0.20)",
-    color: "#f9fafb",
-    fontSize: "clamp(14px, 3.2vw, 16px)",
-    fontWeight: 850,
+  prefsWrap: {
+    marginTop: 16,
   },
-
-  btnRow: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
+  prefsLabel: {
+    fontWeight: 900,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+    fontSize: "clamp(12px, 2vw, 14px)",
+    opacity: 0.75,
+    marginBottom: 10,
+  },
+  pillRow: {
+    display: "flex",
+    flexWrap: "wrap",
     gap: 10,
-    marginTop: 6,
+  },
+  pill: {
+    borderRadius: 999,
+    padding: "12px 14px",
+    border: "1px solid rgba(255,255,255,0.10)",
+    fontWeight: 900,
+    fontSize: "clamp(14px, 3.2vw, 16px)",
+    cursor: "pointer",
+    userSelect: "none",
+  },
+  pillActive: {
+    background: "rgba(148, 163, 184, 0.18)",
+    borderColor: "rgba(148, 163, 184, 0.28)",
+    color: "#f9fafb",
+  },
+  pillInactive: {
+    background: "rgba(0,0,0,0.18)",
+    color: "rgba(249,250,251,0.86)",
   },
 
   primaryBtn: {
+    marginTop: 16,
     width: "100%",
-    padding: "14px 14px",
-    borderRadius: 14,
+    padding: "16px 16px",
+    borderRadius: 16,
     border: "1px solid rgba(255,255,255,0.10)",
     background: "rgba(229,231,235,0.92)",
     color: "#0b0f16",
-    fontSize: "clamp(16px, 3.6vw, 18px)",
+    fontSize: "clamp(18px, 4vw, 22px)",
     fontWeight: 950,
     cursor: "pointer",
   },
+  primaryBtnDisabled: {
+    opacity: 0.45,
+    cursor: "not-allowed",
+  },
 
-  secondaryBtn: {
-    width: "100%",
-    padding: "14px 14px",
+  error: {
+    marginTop: 12,
+    padding: 12,
     borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.10)",
-    background: "rgba(148, 163, 184, 0.18)",
-    color: "#f9fafb",
-    fontSize: "clamp(16px, 3.6vw, 18px)",
-    fontWeight: 950,
-    cursor: "pointer",
-  },
-
-  ghostBtn: {
-    padding: "10px 12px",
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.10)",
-    background: "rgba(0,0,0,0.18)",
-    color: "rgba(249,250,251,0.88)",
-    fontWeight: 900,
-    cursor: "pointer",
-  },
-
-  dangerBtn: {
-    padding: "10px 12px",
-    borderRadius: 12,
-    border: "1px solid rgba(248, 113, 113, 0.22)",
+    border: "1px solid rgba(248, 113, 113, 0.30)",
     background: "rgba(248, 113, 113, 0.12)",
     color: "rgba(254, 226, 226, 0.95)",
-    fontWeight: 950,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  },
-
-  nowUpBox: {
-    marginTop: 8,
-    padding: 12,
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(0,0,0,0.16)",
-  },
-
-  nowUpName: {
-    marginTop: 6,
-    fontSize: "clamp(18px, 4.6vw, 28px)",
-    fontWeight: 950,
-    color: "#f9fafb",
-  },
-
-  waitingList: {
-    display: "grid",
-    gap: 10,
-  },
-
-  waitingRow: {
-    padding: 12,
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(0,0,0,0.16)",
-  },
-
-  waitingTop: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 10,
-    alignItems: "baseline",
-    flexWrap: "wrap",
-  },
-
-  waitingName: {
-    fontWeight: 950,
-    color: "#f9fafb",
-    fontSize: "clamp(16px, 3.8vw, 20px)",
-  },
-
-  waitingMeta: {
     fontWeight: 850,
-    opacity: 0.65,
-    fontSize: "clamp(12px, 2.8vw, 14px)",
   },
 
-  waitingActions: {
-    marginTop: 10,
-    display: "flex",
-    gap: 10,
-    flexWrap: "wrap",
-  },
-
-  empty: {
+  successWrap: {
     textAlign: "center",
+    padding: "clamp(18px, 3.5vw, 28px)",
+    animation: "softPop 220ms ease",
+  },
+  successTitle: {
+    fontSize: "clamp(20px, 4.5vw, 26px)",
+    fontWeight: 950,
+    color: "#f9fafb",
+  },
+  successMsg: {
+    marginTop: 10,
+    fontSize: "clamp(22px, 5.2vw, 34px)",
+    fontWeight: 950,
+    letterSpacing: -0.3,
+  },
+  successHint: {
+    marginTop: 10,
     opacity: 0.7,
     fontWeight: 850,
-    padding: 10,
   },
 
-  note: {
+  footerNote: {
     marginTop: 12,
     textAlign: "center",
-    opacity: 0.6,
+    opacity: 0.55,
+    fontWeight: 800,
+    fontSize: "clamp(12px, 2.2vw, 14px)",
+  },
+
+  bottomHint: {
+    width: "min(720px, 100%)",
+    marginTop: 14,
+    textAlign: "center",
+    opacity: 0.55,
     fontWeight: 800,
     fontSize: "clamp(12px, 2.2vw, 14px)",
   },
