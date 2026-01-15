@@ -26,7 +26,7 @@ export async function addClient(firstName: string, lastInitial: string, preferre
 }
 
 export async function staffNext(myBarberId: string) {
-  requireStaff();
+  await requireStaff();
 
   const waiter = await supabase
     .from("queue_entries")
@@ -78,7 +78,7 @@ export async function staffNext(myBarberId: string) {
 }
 
 export async function recall() {
-  requireStaff();
+  await requireStaff();
 
   const currentCalled = await supabase
     .from("queue_entries")
@@ -100,14 +100,14 @@ export async function recall() {
 }
 
 export async function markNoShow(id: string) {
-  requireStaff();
+  await requireStaff();
   const { error } = await supabase.from("queue_entries").update({ status: "no_show" }).eq("id", id);
   if (error) return { ok: false as const, error: error.message };
   return { ok: true as const };
 }
 
 export async function assignPreferredBarber(id: string, barberId: string | null) {
-  requireStaff();
+  await requireStaff();
   const { error } = await supabase.from("queue_entries").update({ preferred_barber_id: barberId }).eq("id", id);
   if (error) return { ok: false as const, error: error.message };
   return { ok: true as const };

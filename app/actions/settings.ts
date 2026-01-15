@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { Barber } from "@/lib/types";
 
 export async function updateBarbers(barbers: Barber[]) {
-  requireStaff();
+  await requireStaff();
   const { error } = await supabase
     .from("shop_settings")
     .update({ barbers, updated_at: new Date().toISOString() })
@@ -15,7 +15,7 @@ export async function updateBarbers(barbers: Barber[]) {
 }
 
 export async function updateVisibleCount(visible_count: number) {
-  requireStaff();
+  await requireStaff();
   const { error } = await supabase
     .from("shop_settings")
     .update({ visible_count, updated_at: new Date().toISOString() })
