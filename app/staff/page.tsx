@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { QueueEntry, ShopSettings, Barber } from "@/lib/types";
 import { displayName } from "@/lib/types";
 import { login, logout } from "@/app/actions/auth";
 import { staffNext, recall, markNoShow, assignPreferredBarber } from "@/app/actions/queue";
-import { updateBarbers, updateVisibleCount } from "@/app/actions/settings";
 
 export default function StaffPage() {
+  const router = useRouter();
   const [role, setRole] = useState<"staff" | "admin" | null>(null);
   const [pin, setPin] = useState("");
 
@@ -87,7 +88,7 @@ export default function StaffPage() {
 
   async function doLock() {
     await logout();
-    location.reload();
+    setRole(null);
   }
 
   async function run(action: () => Promise<any>) {
@@ -117,6 +118,7 @@ export default function StaffPage() {
               placeholder="PIN"
               inputMode="numeric"
               style={styles.input}
+              onKeyDown={(e) => e.key === "Enter" && doLogin()}
             />
             <button onClick={doLogin} style={styles.primaryBtn}>
               Unlock
@@ -143,9 +145,14 @@ export default function StaffPage() {
 
       <header style={styles.topBar}>
         <div style={styles.topBarTitle}>Staff Controls</div>
-        <button onClick={doLock} style={styles.ghostBtn}>
-          Lock
-        </button>
+        <div style={styles.topBarActions}>
+          <button onClick={() => router.push("/settings")} style={styles.ghostBtn}>
+            Settings
+          </button>
+          <button onClick={doLock} style={styles.ghostBtn}>
+            Lock
+          </button>
+        </div>
       </header>
 
       <div style={styles.grid}>
@@ -154,7 +161,7 @@ export default function StaffPage() {
           <div style={styles.sectionLabel}>Controls</div>
 
           <div style={styles.rowStack}>
-            <label style={styles.smallLabel}>I’m</label>
+            <label style={styles.smallLabel}>I'm</label>
             <select
               value={myBarberId}
               onChange={(e) => setMyBarberId(e.target.value)}
@@ -188,66 +195,11 @@ export default function StaffPage() {
           </div>
         </section>
 
-        {/* SETTINGS */}
-        <section style={styles.card}>
-          <div style={styles.sectionLabel}>Settings</div>
-
-          {!settings ? (
-            <div style={{ opacity: 0.7 }}>Loading…</div>
-          ) : (
-            <div style={styles.settingsStack}>
-              <div style={styles.settingBlock}>
-                <div style={styles.settingTitle}>Barbers working</div>
-                <div style={styles.checklist}>
-                  {settings.barbers.map((b, idx) => (
-                    <label key={b.id} style={styles.checkRow}>
-                      <input
-                        type="checkbox"
-                        checked={b.working}
-                        onChange={(e) =>
-                          run(async () => {
-                            const next: Barber[] = settings.barbers.map((x, i) =>
-                              i === idx ? { ...x, working: e.target.checked } : x
-                            );
-                            const res = await updateBarbers(next);
-                            return res;
-                          })
-                        }
-                      />
-                      <span style={{ fontWeight: 850 }}>{b.name}</span>
-                      <span style={{ opacity: 0.6, fontWeight: 800 }}>({b.id})</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <div style={styles.settingBlock}>
-                <div style={styles.settingTitle}>Visible names</div>
-                <div style={styles.inline}>
-                  <input
-                    type="number"
-                    min={5}
-                    max={30}
-                    value={settings.visible_count}
-                    onChange={(e) =>
-                      run(async () => updateVisibleCount(Number(e.target.value)))
-                    }
-                    style={styles.numInput}
-                  />
-                  <div style={{ opacity: 0.65, fontWeight: 800 }}>Default 10</div>
-                </div>
-              </div>
-
-              {role !== "admin" ? (
-                <div style={styles.note}>Admin-only features can be added later.</div>
-              ) : null}
-            </div>
-          )}
-        </section>
-
         {/* WAITING LIST */}
-        <section style={{ ...styles.card, gridColumn: "1 / -1" }}>
-          <div style={styles.sectionLabel}>Waiting</div>
+        <section style={styles.card}>
+          <div style={styles.sectionLabel}>
+            Waiting <span style={styles.waitingCount}>({waiting.length})</span>
+          </div>
 
           {waiting.length === 0 ? (
             <div style={styles.empty}>No one waiting.</div>
@@ -367,6 +319,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 950,
     color: "#f9fafb",
   },
+  topBarActions: {
+    display: "flex",
+    gap: 8,
+  },
 
   grid: {
     maxWidth: 980,
@@ -375,12 +331,6 @@ const styles: Record<string, React.CSSProperties> = {
     gridTemplateColumns: "1fr",
     gap: 14,
   },
-
-  // Make 2 columns on wider screens
-  // (still mobile-first)
-  // NOTE: inline styles can't do media queries; this keeps it simple.
-  // If you want real 2-col at desktop, we can move to CSS module.
-  // For now it stacks nicely on phones.
 
   card: {
     borderRadius: 18,
@@ -399,6 +349,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "clamp(12px, 2vw, 15px)",
     opacity: 0.75,
     marginBottom: 10,
+  },
+
+  waitingCount: {
+    opacity: 0.6,
+    fontWeight: 800,
   },
 
   rowStack: {
@@ -450,7 +405,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   btnRow: {
     display: "grid",
-    gridTemplateColumns: "1fr",
+    gridTemplateColumns: "1fr 1fr",
     gap: 10,
     marginTop: 6,
   },
@@ -513,53 +468,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "clamp(18px, 4.6vw, 28px)",
     fontWeight: 950,
     color: "#f9fafb",
-  },
-
-  settingsStack: {
-    display: "grid",
-    gap: 14,
-  },
-
-  settingBlock: {
-    padding: 12,
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(0,0,0,0.16)",
-  },
-
-  settingTitle: {
-    fontWeight: 950,
-    opacity: 0.85,
-    marginBottom: 10,
-  },
-
-  checklist: {
-    display: "grid",
-    gap: 10,
-  },
-
-  checkRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-  },
-
-  inline: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    flexWrap: "wrap",
-  },
-
-  numInput: {
-    width: 120,
-    padding: "10px 10px",
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.10)",
-    outline: "none",
-    background: "rgba(0,0,0,0.20)",
-    color: "#f9fafb",
-    fontWeight: 900,
   },
 
   waitingList: {

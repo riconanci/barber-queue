@@ -1,6 +1,6 @@
 "use server";
 
-import { setAuth, clearAuth } from "@/lib/auth";
+import { setAuth, clearAuth, getRole } from "@/lib/auth";
 
 export async function login(pin: string) {
   if (pin === process.env.ADMIN_PIN) {
@@ -17,4 +17,9 @@ export async function login(pin: string) {
 export async function logout() {
   clearAuth();
   return { ok: true as const };
+}
+
+export async function getAuthStatus() {
+  const role = getRole();
+  return { authenticated: !!role, role };
 }

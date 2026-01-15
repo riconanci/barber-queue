@@ -16,12 +16,16 @@ create table if not exists shop_settings (
 
 insert into shop_settings (id, barber_count, visible_count, barbers)
 values (
-  true, 5, 10,
+  true, 9, 10,
   '[
-    {"id":"zach","name":"Zach","working":true},
-    {"id":"robin","name":"Robin","working":true},
     {"id":"rico","name":"Rico","working":true},
+    {"id":"robin","name":"Robin","working":true},
     {"id":"andy","name":"Andy","working":true},
+    {"id":"niko","name":"Niko","working":true},
+    {"id":"gino","name":"Gino","working":true},
+    {"id":"ant","name":"Ant","working":true},
+    {"id":"kalea","name":"Kalea","working":true},
+    {"id":"zach","name":"Zach","working":true},
     {"id":"brian","name":"Brian","working":true}
   ]'::jsonb
 )
