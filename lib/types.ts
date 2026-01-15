@@ -20,6 +20,7 @@ export type QueueEntry = {
   called_at: string | null;
   called_by_barber_id: string | null;
   served_at: string | null;
+  skipped_at: string | null;
 };
 
 export const displayName = (e: Pick<QueueEntry, "first_name" | "last_initial">) =>

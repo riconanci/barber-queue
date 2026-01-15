@@ -25,30 +25,11 @@ export async function addClient(firstName: string, lastInitial: string, preferre
   return { ok: true as const };
 }
 
-export async function staffNext(myBarberId: string) {
+// Accept a client - marks them as called and auto-serves any current called person
+export async function acceptClient(clientId: string, barberId: string) {
   await requireStaff();
 
-  const waiter = await supabase
-    .from("queue_entries")
-    .select("*")
-    .eq("status", "waiting")
-    .eq("preferred_barber_id", myBarberId)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  const any = await supabase
-    .from("queue_entries")
-    .select("*")
-    .eq("status", "waiting")
-    .is("preferred_barber_id", null)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  const next = waiter.data ?? any.data;
-  if (!next) return { ok: false as const, error: "No one waiting" };
-
+  // Auto-serve current called person
   const currentCalled = await supabase
     .from("queue_entries")
     .select("*")
@@ -64,19 +45,48 @@ export async function staffNext(myBarberId: string) {
       .eq("id", currentCalled.data.id);
   }
 
+  // Call the new client
   const { error } = await supabase
     .from("queue_entries")
     .update({
       status: "called",
       called_at: new Date().toISOString(),
-      called_by_barber_id: myBarberId,
+      called_by_barber_id: barberId,
+      skipped_at: null, // Clear skipped if they were in holding
     })
-    .eq("id", next.id);
+    .eq("id", clientId);
 
   if (error) return { ok: false as const, error: error.message };
-  return { ok: true as const, calledId: next.id };
+  return { ok: true as const };
 }
 
+// Skip a client - moves them to "Waiting for Barbers" holding area
+export async function skipClient(clientId: string) {
+  await requireStaff();
+
+  const { error } = await supabase
+    .from("queue_entries")
+    .update({ skipped_at: new Date().toISOString() })
+    .eq("id", clientId);
+
+  if (error) return { ok: false as const, error: error.message };
+  return { ok: true as const };
+}
+
+// Undo skip - puts client back in their original queue position
+export async function undoSkip(clientId: string) {
+  await requireStaff();
+
+  const { error } = await supabase
+    .from("queue_entries")
+    .update({ skipped_at: null })
+    .eq("id", clientId);
+
+  if (error) return { ok: false as const, error: error.message };
+  return { ok: true as const };
+}
+
+// Recall - re-announces the current called person
 export async function recall() {
   await requireStaff();
 

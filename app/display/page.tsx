@@ -11,7 +11,7 @@ export default function DisplayPage() {
   const [entries, setEntries] = useState<QueueEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Flash NOW UP on Next/Recall (called_at changes)
+  // Flash UP NEXT on call
   const [flash, setFlash] = useState(false);
 
   useEffect(() => {
@@ -59,6 +59,7 @@ export default function DisplayPage() {
     };
   }, []);
 
+  // Currently called person (Up Next display)
   const called = useMemo(() => {
     const calledOnes = entries.filter((e) => e.status === "called");
     calledOnes.sort((a, b) => +new Date(b.called_at ?? 0) - +new Date(a.called_at ?? 0));
@@ -84,7 +85,7 @@ export default function DisplayPage() {
       ? nameMap.get(called.called_by_barber_id) ?? called.called_by_barber_id
       : null;
 
-  const hasAnyList = seg.waiters.length > 0 || seg.upNext.length > 0 || seg.onDeck.length > 0;
+  const hasAnyList = seg.skippedWaiters.length > 0 || seg.onDeck.length > 0 || seg.remaining.length > 0;
 
   return (
     <div style={styles.page}>
@@ -96,11 +97,11 @@ export default function DisplayPage() {
         }
       `}</style>
 
-      {/* NOW UP */}
-      <section style={{ ...styles.nowUpCard, ...(flash ? styles.nowUpFlash : {}) }}>
-        <div style={styles.sectionLabel}>NOW UP</div>
-        <div style={styles.nowUpName}>{called ? displayName(called) : "—"}</div>
-        <div style={styles.nowUpSub}>{calledBy ? `with ${calledBy}` : "\u00A0"}</div>
+      {/* UP NEXT (the called person) */}
+      <section style={{ ...styles.upNextCard, ...(flash ? styles.upNextFlash : {}) }}>
+        <div style={styles.sectionLabel}>UP NEXT</div>
+        <div style={styles.upNextName}>{called ? displayName(called) : "—"}</div>
+        <div style={styles.upNextSub}>{calledBy ? `with ${calledBy}` : "\u00A0"}</div>
       </section>
 
       {/* LIST */}
@@ -109,7 +110,7 @@ export default function DisplayPage() {
           <div style={styles.sectionLabel}>LIST</div>
           <div style={styles.headerMeta}>
             <span>
-              Up Next: <b style={styles.headerStrong}>{seg.upNextSize}</b>
+              On Deck: <b style={styles.headerStrong}>{seg.onDeckSize}</b>
             </span>
             <span style={styles.dot}>•</span>
             <span>
@@ -122,8 +123,8 @@ export default function DisplayPage() {
           <div style={styles.emptyState}>No one in line</div>
         ) : (
           <div style={styles.listBody}>
-            {/* WAITERS ABOVE HIGHLIGHT */}
-            {seg.waiters.map((e) => {
+            {/* SKIPPED WAITERS - waiting for specific barber */}
+            {seg.skippedWaiters.map((e) => {
               const barberLabel = e.preferred_barber_id
                 ? nameMap.get(e.preferred_barber_id) ?? e.preferred_barber_id
                 : null;
@@ -132,43 +133,57 @@ export default function DisplayPage() {
                 <div key={e.id} style={styles.row}>
                   <div style={styles.rowMain}>
                     <div style={styles.rowName}>{displayName(e)}</div>
-                    <div style={styles.rowMeta}>{barberLabel ? `waiting on ${barberLabel}` : ""}</div>
+                    <div style={styles.rowMeta}>{barberLabel ? `waiting for ${barberLabel}` : ""}</div>
                   </div>
                 </div>
               );
             })}
 
-            {/* UP NEXT WINDOW */}
-            <div style={styles.upNextWindow}>
-              <div style={styles.upNextHeader}>
-                <div style={styles.upNextTitle}>
-                  UP NEXT <span style={{ opacity: 0.6 }}>({seg.upNextSize})</span>
+            {/* ON DECK WINDOW (highlighted) */}
+            <div style={styles.onDeckWindow}>
+              <div style={styles.onDeckHeader}>
+                <div style={styles.onDeckTitle}>
+                  ON DECK <span style={{ opacity: 0.6 }}>({seg.onDeckSize})</span>
                 </div>
               </div>
 
-              {seg.upNext.length === 0 ? (
+              {seg.onDeck.length === 0 ? (
                 <div style={styles.emptyRow}>—</div>
               ) : (
-                seg.upNext.map((e) => (
-                  <div key={e.id} style={{ ...styles.row, ...styles.upNextRow }}>
-                    <div style={styles.rowMain}>
-                      <div style={styles.rowName}>{displayName(e)}</div>
-                      <div style={styles.rowMeta}>up next</div>
+                seg.onDeck.map((e) => {
+                  const barberLabel = e.preferred_barber_id
+                    ? nameMap.get(e.preferred_barber_id) ?? e.preferred_barber_id
+                    : null;
+                  return (
+                    <div key={e.id} style={{ ...styles.row, ...styles.onDeckRow }}>
+                      <div style={styles.rowMain}>
+                        <div style={styles.rowName}>{displayName(e)}</div>
+                        <div style={styles.rowMeta}>
+                          {barberLabel ? `for ${barberLabel}` : ""}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
 
-            {/* REMAINING NAMES BELOW (NO LABEL) */}
-            {seg.onDeck.map((e) => (
-              <div key={e.id} style={styles.row}>
-                <div style={styles.rowMain}>
-                  <div style={styles.rowName}>{displayName(e)}</div>
-                  <div style={styles.rowMeta} />
+            {/* REMAINING NAMES BELOW */}
+            {seg.remaining.map((e) => {
+              const barberLabel = e.preferred_barber_id
+                ? nameMap.get(e.preferred_barber_id) ?? e.preferred_barber_id
+                : null;
+              return (
+                <div key={e.id} style={styles.row}>
+                  <div style={styles.rowMain}>
+                    <div style={styles.rowName}>{displayName(e)}</div>
+                    <div style={styles.rowMeta}>
+                      {barberLabel ? `for ${barberLabel}` : ""}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -204,22 +219,22 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(229,231,235,0.78)",
   },
 
-  nowUpCard: {
+  upNextCard: {
     borderRadius: 18,
     padding: "clamp(16px, 2.8vw, 26px)",
     textAlign: "center",
-    background: "rgba(17, 24, 39, 0.75)", // slate-900-ish
+    background: "rgba(17, 24, 39, 0.75)",
     border: "1px solid rgba(255,255,255,0.08)",
     boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
     backdropFilter: "blur(10px)",
   },
 
-  nowUpFlash: {
-    outline: "3px solid rgba(148, 163, 184, 0.22)", // subtle slate ring
+  upNextFlash: {
+    outline: "3px solid rgba(148, 163, 184, 0.22)",
     animation: "softFlashDark 650ms ease",
   },
 
-  nowUpName: {
+  upNextName: {
     marginTop: 6,
     fontWeight: 950,
     letterSpacing: -0.5,
@@ -228,7 +243,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#f9fafb",
   },
 
-  nowUpSub: {
+  upNextSub: {
     marginTop: 6,
     fontWeight: 800,
     opacity: 0.75,
@@ -305,8 +320,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(229,231,235,0.62)",
   },
 
-  // Subtle “window” for Up Next — muted slate/steel (not neon)
-  upNextWindow: {
+  onDeckWindow: {
     margin: 12,
     borderRadius: 16,
     border: "1px solid rgba(148, 163, 184, 0.22)",
@@ -314,13 +328,13 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
   },
 
-  upNextHeader: {
+  onDeckHeader: {
     padding: "10px 12px",
     borderBottom: "1px solid rgba(255,255,255,0.08)",
     background: "rgba(0,0,0,0.12)",
   },
 
-  upNextTitle: {
+  onDeckTitle: {
     textAlign: "center",
     fontWeight: 900,
     letterSpacing: 2,
@@ -330,7 +344,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(229,231,235,0.85)",
   },
 
-  upNextRow: {
+  onDeckRow: {
     background: "rgba(255,255,255,0.04)",
   },
 

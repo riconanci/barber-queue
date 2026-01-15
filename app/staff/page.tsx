@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import type { QueueEntry, ShopSettings, Barber } from "@/lib/types";
+import type { QueueEntry, ShopSettings } from "@/lib/types";
 import { displayName } from "@/lib/types";
 import { login, logout } from "@/app/actions/auth";
-import { staffNext, recall, markNoShow, assignPreferredBarber } from "@/app/actions/queue";
+import { acceptClient, skipClient, undoSkip, recall, markNoShow } from "@/app/actions/queue";
 
 export default function StaffPage() {
   const router = useRouter();
@@ -15,8 +15,6 @@ export default function StaffPage() {
 
   const [settings, setSettings] = useState<ShopSettings | null>(null);
   const [entries, setEntries] = useState<QueueEntry[]>([]);
-
-  const [myBarberId, setMyBarberId] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -63,17 +61,54 @@ export default function StaffPage() {
     [settings]
   );
 
-  useEffect(() => {
-    if (!myBarberId && workingBarbers.length) setMyBarberId(workingBarbers[0].id);
-  }, [workingBarbers, myBarberId]);
+  const nameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    (settings?.barbers ?? []).forEach((b) => m.set(b.id, b.name));
+    return m;
+  }, [settings]);
 
+  // Currently called person
   const called = useMemo(() => {
     const calledOnes = entries.filter((e) => e.status === "called");
     calledOnes.sort((a, b) => +new Date(b.called_at ?? 0) - +new Date(a.called_at ?? 0));
     return calledOnes[0] ?? null;
   }, [entries]);
 
+  // Waiting entries
   const waiting = useMemo(() => entries.filter((e) => e.status === "waiting"), [entries]);
+
+  // Up Next: first non-skipped waiting client
+  const upNext = useMemo(() => {
+    const nonSkipped = waiting
+      .filter((e) => !e.skipped_at)
+      .sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at));
+    return nonSkipped[0] ?? null;
+  }, [waiting]);
+
+  // Waiting for Barbers: skipped clients grouped by barber
+  const waitingForBarbers = useMemo(() => {
+    const skipped = waiting
+      .filter((e) => !!e.skipped_at && !!e.preferred_barber_id)
+      .sort((a, b) => +new Date(a.skipped_at!) - +new Date(b.skipped_at!));
+
+    // Group by barber
+    const grouped = new Map<string, QueueEntry[]>();
+    skipped.forEach((e) => {
+      const bid = e.preferred_barber_id!;
+      if (!grouped.has(bid)) grouped.set(bid, []);
+      grouped.get(bid)!.push(e);
+    });
+
+    return grouped;
+  }, [waiting]);
+
+  // Queue: remaining non-skipped waiting clients (excluding upNext)
+  const queue = useMemo(() => {
+    const nonSkipped = waiting
+      .filter((e) => !e.skipped_at)
+      .sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at));
+    return nonSkipped.slice(1); // Exclude first one (upNext)
+  }, [waiting]);
 
   async function doLogin() {
     const res = await login(pin);
@@ -100,6 +135,14 @@ export default function StaffPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // Time ago helper
+  function timeAgo(dateStr: string) {
+    const mins = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000);
+    if (mins < 1) return "just now";
+    if (mins === 1) return "1 min";
+    return `${mins} min`;
   }
 
   if (!role) {
@@ -135,17 +178,12 @@ export default function StaffPage() {
 
   return (
     <div style={styles.page}>
-      <style>{`
-        @keyframes softFlashDark {
-          0% { transform: scale(1); box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
-          45% { transform: scale(1.01); box-shadow: 0 16px 44px rgba(0,0,0,0.48); }
-          100% { transform: scale(1); box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
-        }
-      `}</style>
-
       <header style={styles.topBar}>
         <div style={styles.topBarTitle}>Staff Controls</div>
         <div style={styles.topBarActions}>
+          <button onClick={() => run(() => recall())} style={styles.ghostBtn} disabled={busy}>
+            Recall
+          </button>
           <button onClick={() => router.push("/settings")} style={styles.ghostBtn}>
             Settings
           </button>
@@ -155,119 +193,171 @@ export default function StaffPage() {
         </div>
       </header>
 
-      <div style={styles.grid}>
-        {/* CONTROLS */}
-        <section style={styles.card}>
-          <div style={styles.sectionLabel}>Controls</div>
+      <div style={styles.container}>
+        {/* UP NEXT CARD */}
+        <section style={styles.upNextCard}>
+          <div style={styles.sectionLabel}>UP NEXT</div>
 
-          <div style={styles.rowStack}>
-            <label style={styles.smallLabel}>I'm</label>
-            <select
-              value={myBarberId}
-              onChange={(e) => setMyBarberId(e.target.value)}
-              style={styles.select}
-            >
-              {workingBarbers.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-
-            <div style={styles.btnRow}>
-              <button
-                onClick={() => run(() => staffNext(myBarberId))}
-                style={styles.primaryBtn}
-                disabled={busy}
-              >
-                Next for me
-              </button>
-
-              <button onClick={() => run(() => recall())} style={styles.secondaryBtn} disabled={busy}>
-                Recall
-              </button>
+          {called ? (
+            <div style={styles.calledInfo}>
+              <div style={styles.calledName}>{displayName(called)}</div>
+              <div style={styles.calledMeta}>
+                with {nameMap.get(called.called_by_barber_id ?? "") ?? called.called_by_barber_id}
+              </div>
             </div>
+          ) : upNext ? (
+            <>
+              <div style={styles.upNextInfo}>
+                <div style={styles.upNextName}>{displayName(upNext)}</div>
+                <div style={styles.upNextMeta}>
+                  {upNext.preferred_barber_id
+                    ? `for ${nameMap.get(upNext.preferred_barber_id) ?? upNext.preferred_barber_id}`
+                    : "Any barber"}
+                </div>
+              </div>
 
-            <div style={styles.nowUpBox}>
-              <div style={styles.smallLabel}>Now Up</div>
-              <div style={styles.nowUpName}>{called ? displayName(called) : "—"}</div>
-            </div>
-          </div>
+              <div style={styles.upNextActions}>
+                {upNext.preferred_barber_id ? (
+                  // Specific barber - show Accept as [Barber] and Skip
+                  <>
+                    <button
+                      onClick={() => run(() => acceptClient(upNext.id, upNext.preferred_barber_id!))}
+                      style={styles.acceptBtn}
+                      disabled={busy}
+                    >
+                      Accept as {nameMap.get(upNext.preferred_barber_id) ?? upNext.preferred_barber_id}
+                    </button>
+                    <button
+                      onClick={() => run(() => skipClient(upNext.id))}
+                      style={styles.skipBtn}
+                      disabled={busy}
+                    >
+                      Skip
+                    </button>
+                  </>
+                ) : (
+                  // Any barber - show dropdown
+                  <div style={styles.acceptRow}>
+                    <select
+                      id="barberSelect"
+                      style={styles.barberSelect}
+                      defaultValue=""
+                    >
+                      <option value="" disabled>Accept as...</option>
+                      {workingBarbers.map((b) => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => {
+                        const select = document.getElementById("barberSelect") as HTMLSelectElement;
+                        if (select.value) {
+                          run(() => acceptClient(upNext.id, select.value));
+                        }
+                      }}
+                      style={styles.acceptBtn}
+                      disabled={busy}
+                    >
+                      Accept
+                    </button>
+                  </div>
+                )}
+                <button
+                  onClick={() => run(() => markNoShow(upNext.id))}
+                  style={styles.noShowBtn}
+                  disabled={busy}
+                >
+                  ✕
+                </button>
+              </div>
+            </>
+          ) : (
+            <div style={styles.empty}>No one in queue</div>
+          )}
         </section>
 
-        {/* WAITING LIST */}
+        {/* WAITING FOR BARBERS */}
+        {waitingForBarbers.size > 0 && (
+          <section style={styles.card}>
+            <div style={styles.sectionLabel}>Waiting for Barbers</div>
+
+            <div style={styles.barberGroups}>
+              {Array.from(waitingForBarbers.entries()).map(([barberId, clients]) => (
+                <div key={barberId} style={styles.barberGroup}>
+                  <div style={styles.barberGroupHeader}>
+                    {nameMap.get(barberId) ?? barberId}
+                    <span style={styles.barberGroupCount}>({clients.length})</span>
+                  </div>
+
+                  {clients.map((e) => (
+                    <div key={e.id} style={styles.waiterRow}>
+                      <div style={styles.waiterInfo}>
+                        <span style={styles.waiterName}>{displayName(e)}</span>
+                        <span style={styles.waiterTime}>{timeAgo(e.skipped_at!)}</span>
+                      </div>
+                      <div style={styles.waiterActions}>
+                        <button
+                          onClick={() => run(() => acceptClient(e.id, barberId))}
+                          style={styles.smallAcceptBtn}
+                          disabled={busy}
+                        >
+                          Accept
+                        </button>
+                        <button
+                          onClick={() => run(() => undoSkip(e.id))}
+                          style={styles.smallUndoBtn}
+                          disabled={busy}
+                        >
+                          ↩
+                        </button>
+                        <button
+                          onClick={() => run(() => markNoShow(e.id))}
+                          style={styles.smallNoShowBtn}
+                          disabled={busy}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* QUEUE */}
         <section style={styles.card}>
           <div style={styles.sectionLabel}>
-            Waiting <span style={styles.waitingCount}>({waiting.length})</span>
+            Queue <span style={styles.queueCount}>({queue.length})</span>
           </div>
 
-          {waiting.length === 0 ? (
-            <div style={styles.empty}>No one waiting.</div>
+          {queue.length === 0 ? (
+            <div style={styles.empty}>Queue is empty</div>
           ) : (
-            <div style={styles.waitingList}>
-              {waiting.slice(0, 30).map((e) => (
-                <WaitingRow
-                  key={e.id}
-                  e={e}
-                  settings={settings}
-                  workingBarbers={workingBarbers}
-                  busy={busy}
-                  onNoShow={() => run(() => markNoShow(e.id))}
-                  onAssign={(barberIdOrNull) => run(() => assignPreferredBarber(e.id, barberIdOrNull))}
-                />
+            <div style={styles.queueList}>
+              {queue.slice(0, 20).map((e) => (
+                <div key={e.id} style={styles.queueRow}>
+                  <div style={styles.queueInfo}>
+                    <span style={styles.queueName}>{displayName(e)}</span>
+                    <span style={styles.queueMeta}>
+                      {e.preferred_barber_id
+                        ? `for ${nameMap.get(e.preferred_barber_id) ?? e.preferred_barber_id}`
+                        : "Any barber"}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => run(() => markNoShow(e.id))}
+                    style={styles.smallNoShowBtn}
+                    disabled={busy}
+                  >
+                    ✕
+                  </button>
+                </div>
               ))}
             </div>
           )}
         </section>
-      </div>
-    </div>
-  );
-}
-
-function WaitingRow({
-  e,
-  settings,
-  workingBarbers,
-  busy,
-  onNoShow,
-  onAssign,
-}: {
-  e: QueueEntry;
-  settings: ShopSettings | null;
-  workingBarbers: Barber[];
-  busy: boolean;
-  onNoShow: () => void;
-  onAssign: (barberIdOrNull: string | null) => void;
-}) {
-  const currentLabel = e.preferred_barber_id
-    ? settings?.barbers.find((b) => b.id === e.preferred_barber_id)?.name ?? e.preferred_barber_id
-    : "Any barber";
-
-  return (
-    <div style={styles.waitingRow}>
-      <div style={styles.waitingTop}>
-        <div style={styles.waitingName}>{displayName(e)}</div>
-        <div style={styles.waitingMeta}>{currentLabel}</div>
-      </div>
-
-      <div style={styles.waitingActions}>
-        <select
-          value={e.preferred_barber_id ?? ""}
-          onChange={(ev) => onAssign(ev.target.value ? ev.target.value : null)}
-          style={styles.selectSmall}
-          disabled={busy}
-        >
-          <option value="">Any barber</option>
-          {workingBarbers.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
-
-        <button onClick={onNoShow} style={styles.dangerBtn} disabled={busy}>
-          No-show
-        </button>
       </div>
     </div>
   );
@@ -307,12 +397,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   topBar: {
-    maxWidth: 980,
+    maxWidth: 600,
     margin: "0 auto 14px auto",
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
     gap: 12,
+    flexWrap: "wrap",
   },
   topBarTitle: {
     fontSize: "clamp(18px, 3.5vw, 24px)",
@@ -324,11 +415,10 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
   },
 
-  grid: {
-    maxWidth: 980,
+  container: {
+    maxWidth: 600,
     margin: "0 auto",
     display: "grid",
-    gridTemplateColumns: "1fr",
     gap: 14,
   },
 
@@ -341,6 +431,15 @@ const styles: Record<string, React.CSSProperties> = {
     backdropFilter: "blur(10px)",
   },
 
+  upNextCard: {
+    borderRadius: 18,
+    background: "rgba(17, 24, 39, 0.80)",
+    border: "1px solid rgba(148, 163, 184, 0.15)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+    padding: "clamp(16px, 3vw, 24px)",
+    backdropFilter: "blur(10px)",
+  },
+
   sectionLabel: {
     textAlign: "center",
     fontWeight: 900,
@@ -348,23 +447,235 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     fontSize: "clamp(12px, 2vw, 15px)",
     opacity: 0.75,
+    marginBottom: 12,
+  },
+
+  calledInfo: {
+    textAlign: "center",
+    padding: "8px 0",
+  },
+  calledName: {
+    fontSize: "clamp(24px, 5vw, 36px)",
+    fontWeight: 950,
+    color: "#f9fafb",
+  },
+  calledMeta: {
+    marginTop: 4,
+    fontSize: "clamp(14px, 3vw, 18px)",
+    fontWeight: 800,
+    opacity: 0.7,
+  },
+
+  upNextInfo: {
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  upNextName: {
+    fontSize: "clamp(24px, 5vw, 36px)",
+    fontWeight: 950,
+    color: "#f9fafb",
+  },
+  upNextMeta: {
+    marginTop: 4,
+    fontSize: "clamp(14px, 3vw, 18px)",
+    fontWeight: 800,
+    opacity: 0.7,
+  },
+
+  upNextActions: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+    justifyContent: "center",
+  },
+
+  acceptRow: {
+    display: "flex",
+    gap: 8,
+    flex: 1,
+  },
+
+  barberSelect: {
+    flex: 1,
+    padding: "12px 12px",
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.10)",
+    outline: "none",
+    background: "rgba(0,0,0,0.20)",
+    color: "#f9fafb",
+    fontSize: "clamp(14px, 3vw, 16px)",
+    fontWeight: 850,
+  },
+
+  acceptBtn: {
+    padding: "12px 20px",
+    borderRadius: 12,
+    border: "1px solid rgba(74, 222, 128, 0.25)",
+    background: "rgba(74, 222, 128, 0.15)",
+    color: "rgba(187, 247, 208, 0.95)",
+    fontSize: "clamp(14px, 3vw, 16px)",
+    fontWeight: 950,
+    cursor: "pointer",
+  },
+
+  skipBtn: {
+    padding: "12px 20px",
+    borderRadius: 12,
+    border: "1px solid rgba(251, 191, 36, 0.25)",
+    background: "rgba(251, 191, 36, 0.15)",
+    color: "rgba(254, 240, 138, 0.95)",
+    fontSize: "clamp(14px, 3vw, 16px)",
+    fontWeight: 950,
+    cursor: "pointer",
+  },
+
+  noShowBtn: {
+    padding: "12px 16px",
+    borderRadius: 12,
+    border: "1px solid rgba(248, 113, 113, 0.22)",
+    background: "rgba(248, 113, 113, 0.12)",
+    color: "rgba(254, 226, 226, 0.95)",
+    fontSize: "clamp(14px, 3vw, 16px)",
+    fontWeight: 950,
+    cursor: "pointer",
+  },
+
+  barberGroups: {
+    display: "grid",
+    gap: 12,
+  },
+
+  barberGroup: {
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.08)",
+    background: "rgba(0,0,0,0.16)",
+  },
+
+  barberGroupHeader: {
+    fontWeight: 950,
+    fontSize: "clamp(14px, 3vw, 18px)",
+    color: "#f9fafb",
     marginBottom: 10,
   },
 
-  waitingCount: {
+  barberGroupCount: {
+    opacity: 0.6,
+    fontWeight: 800,
+    marginLeft: 6,
+  },
+
+  waiterRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 0",
+    borderTop: "1px solid rgba(255,255,255,0.06)",
+  },
+
+  waiterInfo: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+
+  waiterName: {
+    fontWeight: 900,
+    fontSize: "clamp(14px, 3vw, 16px)",
+    color: "#f9fafb",
+  },
+
+  waiterTime: {
+    fontWeight: 800,
+    fontSize: "clamp(12px, 2.5vw, 14px)",
+    opacity: 0.6,
+  },
+
+  waiterActions: {
+    display: "flex",
+    gap: 6,
+  },
+
+  smallAcceptBtn: {
+    padding: "8px 12px",
+    borderRadius: 10,
+    border: "1px solid rgba(74, 222, 128, 0.25)",
+    background: "rgba(74, 222, 128, 0.15)",
+    color: "rgba(187, 247, 208, 0.95)",
+    fontSize: "clamp(12px, 2.5vw, 14px)",
+    fontWeight: 950,
+    cursor: "pointer",
+  },
+
+  smallUndoBtn: {
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: "1px solid rgba(148, 163, 184, 0.20)",
+    background: "rgba(148, 163, 184, 0.12)",
+    color: "rgba(203, 213, 225, 0.95)",
+    fontSize: "clamp(12px, 2.5vw, 14px)",
+    fontWeight: 950,
+    cursor: "pointer",
+  },
+
+  smallNoShowBtn: {
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: "1px solid rgba(248, 113, 113, 0.22)",
+    background: "rgba(248, 113, 113, 0.12)",
+    color: "rgba(254, 226, 226, 0.95)",
+    fontSize: "clamp(12px, 2.5vw, 14px)",
+    fontWeight: 950,
+    cursor: "pointer",
+  },
+
+  queueCount: {
     opacity: 0.6,
     fontWeight: 800,
   },
 
-  rowStack: {
+  queueList: {
     display: "grid",
-    gap: 10,
+    gap: 8,
   },
 
-  smallLabel: {
+  queueRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.06)",
+    background: "rgba(0,0,0,0.12)",
+  },
+
+  queueInfo: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+
+  queueName: {
+    fontWeight: 900,
+    fontSize: "clamp(14px, 3vw, 16px)",
+    color: "#f9fafb",
+  },
+
+  queueMeta: {
+    fontWeight: 800,
+    fontSize: "clamp(12px, 2.5vw, 14px)",
+    opacity: 0.6,
+  },
+
+  empty: {
+    textAlign: "center",
+    opacity: 0.7,
     fontWeight: 850,
-    opacity: 0.75,
-    fontSize: "clamp(12px, 2.2vw, 14px)",
+    padding: 10,
   },
 
   input: {
@@ -379,56 +690,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 850,
   },
 
-  select: {
-    width: "100%",
-    padding: "12px 12px",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.10)",
-    outline: "none",
-    background: "rgba(0,0,0,0.20)",
-    color: "#f9fafb",
-    fontSize: "clamp(16px, 3.6vw, 18px)",
-    fontWeight: 850,
-  },
-
-  selectSmall: {
-    flex: 1,
-    padding: "10px 10px",
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.10)",
-    outline: "none",
-    background: "rgba(0,0,0,0.20)",
-    color: "#f9fafb",
-    fontSize: "clamp(14px, 3.2vw, 16px)",
-    fontWeight: 850,
-  },
-
-  btnRow: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 10,
-    marginTop: 6,
-  },
-
   primaryBtn: {
+    marginTop: 12,
     width: "100%",
     padding: "14px 14px",
     borderRadius: 14,
     border: "1px solid rgba(255,255,255,0.10)",
     background: "rgba(229,231,235,0.92)",
     color: "#0b0f16",
-    fontSize: "clamp(16px, 3.6vw, 18px)",
-    fontWeight: 950,
-    cursor: "pointer",
-  },
-
-  secondaryBtn: {
-    width: "100%",
-    padding: "14px 14px",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.10)",
-    background: "rgba(148, 163, 184, 0.18)",
-    color: "#f9fafb",
     fontSize: "clamp(16px, 3.6vw, 18px)",
     fontWeight: 950,
     cursor: "pointer",
@@ -442,78 +711,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(249,250,251,0.88)",
     fontWeight: 900,
     cursor: "pointer",
-  },
-
-  dangerBtn: {
-    padding: "10px 12px",
-    borderRadius: 12,
-    border: "1px solid rgba(248, 113, 113, 0.22)",
-    background: "rgba(248, 113, 113, 0.12)",
-    color: "rgba(254, 226, 226, 0.95)",
-    fontWeight: 950,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  },
-
-  nowUpBox: {
-    marginTop: 8,
-    padding: 12,
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(0,0,0,0.16)",
-  },
-
-  nowUpName: {
-    marginTop: 6,
-    fontSize: "clamp(18px, 4.6vw, 28px)",
-    fontWeight: 950,
-    color: "#f9fafb",
-  },
-
-  waitingList: {
-    display: "grid",
-    gap: 10,
-  },
-
-  waitingRow: {
-    padding: 12,
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(0,0,0,0.16)",
-  },
-
-  waitingTop: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 10,
-    alignItems: "baseline",
-    flexWrap: "wrap",
-  },
-
-  waitingName: {
-    fontWeight: 950,
-    color: "#f9fafb",
-    fontSize: "clamp(16px, 3.8vw, 20px)",
-  },
-
-  waitingMeta: {
-    fontWeight: 850,
-    opacity: 0.65,
-    fontSize: "clamp(12px, 2.8vw, 14px)",
-  },
-
-  waitingActions: {
-    marginTop: 10,
-    display: "flex",
-    gap: 10,
-    flexWrap: "wrap",
-  },
-
-  empty: {
-    textAlign: "center",
-    opacity: 0.7,
-    fontWeight: 850,
-    padding: 10,
   },
 
   note: {
