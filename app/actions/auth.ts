@@ -19,7 +19,7 @@ export async function logout() {
   return { ok: true as const };
 }
 
-export async function getAuthStatus() {
+export async function getAuthStatus(): Promise<{ authenticated: boolean; role: "staff" | "admin" | null }> {
   const role = getRole();
   return { authenticated: !!role, role };
 }
