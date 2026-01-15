@@ -116,6 +116,16 @@ export async function markNoShow(id: string) {
   return { ok: true as const };
 }
 
+export async function markServed(id: string) {
+  await requireStaff();
+  const { error } = await supabase
+    .from("queue_entries")
+    .update({ status: "served", served_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) return { ok: false as const, error: error.message };
+  return { ok: true as const };
+}
+
 export async function assignPreferredBarber(id: string, barberId: string | null) {
   await requireStaff();
   const { error } = await supabase.from("queue_entries").update({ preferred_barber_id: barberId }).eq("id", id);
